@@ -99,7 +99,7 @@ export async function loadConfig(path, overrides = {}, {
     const localOverrides = { ...(account === undefined ? {} : { account }), ...(runnerName === undefined ? {} : { runnerName }) };
     validateConfig({ ...placeholder, ...projectOverrides }, localOverrides);
     const project = { version: 1, configureOwner: false, jobEnv: {}, ...source, ...projectOverrides };
-    const requireLabels = ['setup', 'instructions', 'rename'].includes(command);
+    const requireLabels = ['setup', 'instructions', 'rename', 'workflow'].includes(command);
     let prompted = false;
     for (const [key, question, option] of [
         ['repository', 'GitHub repository (owner/repo): ', '--repository owner/repo'],

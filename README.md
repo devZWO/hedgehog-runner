@@ -74,8 +74,8 @@ longer discovered.
 
 **CLI options override file settings, which override defaults.** Options work
 before or after any lifecycle command and can be combined with `--config`.
-Every command except `list` needs a repository. `setup`, `instructions` and
-`rename` also need at least one custom label. Only `setup` asks for missing
+Every command except `list` needs a repository. `setup`, `instructions`, `rename`
+and `workflow` also need at least one custom label. Only `setup` asks for missing
 required settings, and only in an interactive terminal. Other commands and
 noninteractive invocations report the missing setting and the corresponding
 option. Invalid supplied values or malformed files produce errors instead of
@@ -97,6 +97,9 @@ being replaced by interactive questions.
 | `--job-env CACHE_DIR=/tmp/cache --job-env MODE=local` | Replaces the complete `jobEnv` map. Values may contain `=`; empty values are supported. Duplicate keys are rejected. |
 | `--account gha-existing` | Overrides `account` in the local profile. |
 | `--runner-name my-laptop` | Overrides `runnerName` in the local profile. |
+| `--job e2e` | `workflow` only: ID of the existing workload job to show in the YAML fragment (default `e2e`). |
+| `--ref <full-commit-sha>` | `workflow` only: reviewed 40-character SHA containing the published reusable workflow. Without it, output is marked as a template with a placeholder. |
+| `--fallback ubuntu-latest` | `workflow` only: hosted fallback label. Defaults to `ubuntu-latest`; supports `ubuntu-*`, `windows-*` and `macos-*` labels. Choose a label available to your repository. |
 
 `version` describes the file format and has no CLI option. Omitting optional
 settings uses `configureOwner: false`, `jobEnv: {}` and the derived account/name.
@@ -152,6 +155,7 @@ repositories.
 | `configure-owner` | Selects the GitHub account whose PRs a compatible workflow should prefer to run locally, and configures its numeric ID as `RUNNER_OWNER_ID`. Can run independently of runner setup or registration. Requires `configureOwner: true` or `--configure-owner`. |
 | `status` | Shows the local process and registration state and, when enabled, the owner variable status. |
 | `list` | Lists local installations grouped by their registered GitHub repository, without project configuration. Requests sudo authentication in an interactive terminal if needed. |
+| `workflow` | Prints a copy/paste YAML fragment for reusable runner selection and an existing workload job. Uses resolved project/CLI configuration; does not edit files or contact GitHub. |
 | `start` / `stop` | Starts the runner in the foreground or stops it from another terminal. |
 | `rename` | Confirms re-registration with a new display name. The workspace and caches are preserved. |
 | `remove` | Prompts to deregister the runner and optionally delete its data and account. |
@@ -180,18 +184,19 @@ CLI verifies the username through GitHub's public API and shows the exact ID and
 GitHub settings page for manual configuration, then asks you to confirm completion.
 The value is configuration, not a secret; no personal access token is requested.
 
-**Your workflow must implement the runner selection.** `RUNNER_OWNER_ID` is a
+**Your workflow must opt into runner selection.** `RUNNER_OWNER_ID` is a
 convention used by cooperating workflows; GitHub does not automatically route jobs
-based on it, and this command does not install or edit a workflow. A workflow can
-compare `github.event.pull_request.user.id` with `vars.RUNNER_OWNER_ID`, check that
-the PR comes from the same repository, and query whether a runner with the required
-labels is online and idle before choosing its `runs-on` value.
+based on it, and `configure-owner` does not install or edit a workflow. Use the
+[workflow generator](#generate-ci-integration) to integrate the reusable selector.
+It compares `github.event.pull_request.user.id` with `vars.RUNNER_OWNER_ID`, checks
+that the PR comes from the same repository, and queries whether a runner with all
+required labels is online and idle before choosing its `runs-on` value.
 
 The original zwoPRO integration uses exactly that policy: matching same-repository
 owner PRs prefer the available laptop runner; other PRs, pushes to `main`, missing
 or invalid owner configuration, and failed availability checks use `ubuntu-latest`.
-That fallback is implemented by zwoPRO's workflow and selector, not by Hedgehog
-Runner. Availability is checked before selection; it does not guarantee failover
+Hedgehog Runner's reusable selector extracts that policy for other repositories,
+with configurable labels and a hosted fallback. Availability is checked before selection; it does not guarantee failover
 if a runner goes offline after a job has been assigned.
 
 The variable selects one PR-author account for the entire repository, not a
@@ -199,6 +204,95 @@ separate owner for each installed runner. Changing it affects every workflow tha
 uses it. It does not restrict which workflows may use a self-hosted runner, change
 the Linux account, or rename an existing registration. Runner labels and workflow
 selection determine where jobs run; the display name is informational.
+
+### Generate CI integration
+
+```sh
+hedgehog-runner workflow --job e2e
+```
+
+The command reads `.hedgehog.json` (or `--config`) and applies the usual CLI
+overrides. It prints a YAML fragment to standard output, ready to merge under the
+existing `jobs:` mapping in your CI workflow. No file is written, and there is no
+`--write` option. It performs no sudo or GitHub API operations. Successful `setup`
+prints a reminder about this command.
+
+The fragment contains a `runner_selection` job and the `needs` / `runs-on` fields
+for your existing `e2e` job. Keep the existing job's steps, name and settings, merge
+its existing dependencies into `needs`, and preserve any additional permissions
+it requires. This matters for required checks and jobs that already depend on
+builds or other quality gates. `--job` selects another existing job ID. The label
+list includes `self-hosted`, `linux`, `x64` and your configured custom labels.
+
+The reusable workflow must first be published to
+`devZWO/hedgehog-runner/.github/workflows/select-runner.yml`. This package does not
+embed a published revision yet: without `--ref`, the output says **TEMPLATE ONLY**
+and includes `REPLACE_WITH_PUBLISHED_WORKFLOW_COMMIT_SHA`. Replace it with a reviewed
+full commit SHA containing that workflow, or regenerate with:
+
+```sh
+hedgehog-runner workflow --job e2e --ref "$SELECTOR_COMMIT_SHA"
+```
+
+Set `SELECTOR_COMMIT_SHA` to the actual published SHA first. The generator checks
+its format offline; you must verify that the commit belongs to this repository
+and contains the workflow. It deliberately does not guess a SHA from your local
+checkout or reference `main` or a mutable tag. Use `--repository owner/repo
+--label laptop` to generate a fragment without a project configuration file.
+
+The reusable workflow accepts:
+
+| Input | Purpose |
+| --- | --- |
+| `owner-id` | Numeric GitHub account ID, normally `${{ vars.RUNNER_OWNER_ID }}`. Missing/invalid IDs select the hosted fallback. |
+| `labels` | JSON array of all required labels, including `self-hosted`. Every label must match on an online, idle runner. |
+| `fallback` | Hosted runner label; defaults to `ubuntu-latest`. Invalid label syntax uses `ubuntu-latest`. |
+| Secret `app-id` | GitHub App ID; optional, passed explicitly from `RUNNER_APP_ID`. |
+| Secret `app-private-key` | GitHub App private key; optional, passed explicitly from `RUNNER_APP_PRIVATE_KEY`. |
+| Output `runs-on` | JSON string for a hosted label or JSON array of self-hosted labels, consumed with `fromJSON(...)`. |
+| Output `reason` | Human-readable decision reason, without API errors or credentials. |
+
+The selector runs on `ubuntu-latest`, with a five-minute job timeout. Non-owner
+PRs, forks and events other than `pull_request` use the hosted fallback without
+requesting an App token or querying runners. Missing credentials, token creation
+failures, API errors and no matching idle runner also select the hosted fallback.
+The availability query paginates through the caller repository's runners.
+
+### GitHub App setup and trust boundaries
+
+1. Create a GitHub App with repository permission **Administration: Read-only**,
+   which GitHub requires for listing repository runners. Disable webhooks if you
+   do not otherwise need them. See [GitHub App registration](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/registering-a-github-app).
+2. Install it only on the consuming repository. Record its **App ID**, generate a
+   private key, and add repository Actions secrets `RUNNER_APP_ID` and
+   `RUNNER_APP_PRIVATE_KEY`. The generator prints only these names, never values.
+3. Configure the numeric `RUNNER_OWNER_ID` Actions variable with `configure-owner`.
+4. Review and pin the reusable workflow to a full commit SHA, then merge the
+   generated fragment. For private workflow repositories, configure their Actions
+   access policy to allow the caller. The workflow must also be allowed by the
+   caller's repository/organization Actions policy.
+
+`jobs.<job>.uses: owner/repo/.github/workflows/file.yml@sha` calls a reusable
+workflow declaring `on: workflow_call`. `steps[].uses` calls an Action, which can
+use JavaScript, composite steps or Docker; `uses` does not imply a Docker image.
+See [reusing workflows](https://docs.github.com/en/actions/how-tos/reuse-automations/reuse-workflows).
+
+The selection job executes only code embedded in the pinned reusable workflow.
+It does not check out or execute the caller's PR code. Its internal Actions are
+also pinned to verified full SHAs. The temporary App installation token is limited
+to the caller repository and `Administration: read`; it is created only for an
+eligible PR and is not returned as a workflow output or sent to the workload job.
+Secrets are passed individually, without `secrets: inherit`. The workflow uses
+`contents: read` for its built-in `GITHUB_TOKEN`; App-token permissions are separate.
+
+The App private key remains a powerful credential. Keep its installation and
+permissions narrow and trust every workflow to which you expose it. A PR author
+with permission to alter the caller workflow may change how repository secrets
+are used; the selector's owner check is not a general protection for those secrets.
+Avoid running untrusted PR code with secrets via `pull_request_target`. Treat
+self-hosted runner workloads as trusted code with access to the runner's host;
+the owner rule and a dedicated Linux account do not provide complete isolation.
+See [GitHub's secure-use guidance](https://docs.github.com/en/actions/reference/security/secure-use).
 
 ### Remove a runner
 
@@ -266,7 +360,23 @@ run `sudo -v` in the same terminal first to include protected account details.
 ## Development
 
 Run `npm test` for the Node test suite and `npm run package:check` to install
-and check a locally packed tarball. CI generates an LCOV report and publishes
+and check a locally packed tarball. Run `npm ci` first to install the development
+YAML parser used by tests. `npm run workflow:check` checks that the committed
+selector workflow embeds the current tested selection functions. After editing
+`src/selection.mjs`, regenerate it with `node scripts/selection-workflow.mjs`.
+`npm test` and `npm run test:coverage` first run `npm run workflow:lint`: actionlint
+checks every repository workflow plus completed generator examples against the
+actual local reusable-workflow interface. Thus malformed expressions, unknown
+inputs or mismatched secret names fail tests, not just a one-time manual check.
+On the supported Linux x86-64 development host, the first lint run downloads
+actionlint 1.7.12 from its official release into `node_modules/.cache/hedgehog-runner`.
+The pinned SHA-256 is verified before execution on every run; no sudo is used.
+Later runs work offline with the cached archive. For an offline first run, set
+`HEDGEHOG_ACTIONLINT_ARCHIVE` to a predownloaded copy of the exact official
+`actionlint_1.7.12_linux_amd64.tar.gz`; its digest is still checked. Optional system
+shellcheck and pyflakes integration is disabled to keep results reproducible.
+The generated workflow needs no checkout, npm installation or runtime download
+of selection source. CI generates an LCOV report and publishes
 it to Codecov when `CODECOV_TOKEN` is configured.
 
 [MIT License](LICENSE)

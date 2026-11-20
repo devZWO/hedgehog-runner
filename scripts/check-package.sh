@@ -11,3 +11,8 @@ cd "$tmp"
 grep -q 'Usage: hedgehog-runner' help.txt
 grep -q -- '--job-env' help.txt
 grep -q 'List local installations' help.txt
+grep -q 'workflow.*Print a CI runner-selection' help.txt
+./node_modules/.bin/hedgehog-runner workflow --repository example-org/example-repo --label laptop --job e2e > workflow.yml
+grep -q 'TEMPLATE ONLY' workflow.yml
+grep -q 'REPLACE_WITH_PUBLISHED_WORKFLOW_COMMIT_SHA' workflow.yml
+grep -q 'runner_selection:' workflow.yml

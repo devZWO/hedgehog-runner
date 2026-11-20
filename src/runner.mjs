@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { parseArgs } from 'node:util';
 import { loadConfig } from './config.mjs';
+import { workflowExample } from './workflow.mjs';
 
 export function createRunner(config) {
     const { account, configureOwner, jobEnv, labels, repository, runnerName: localRunnerName } = config;
@@ -702,6 +703,8 @@ export function createRunner(config) {
                 return 1;
             }
         }
+        console.log('To integrate CI runner selection, run `hedgehog-runner workflow --job e2e` with the same configuration. '
+            + 'It prints a YAML example and never edits your workflows.');
         return 0;
     }
 
@@ -1153,6 +1156,7 @@ Usage: hedgehog-runner <command> [options]
   rename           Confirm deregistration and re-registration under a new name.
   status           Show local registration, process and optional owner status.
   list             List local installations grouped by repository (read-only).
+  workflow         Print a CI runner-selection YAML example; never edits files.
   start            Start the runner in the foreground. Ctrl+C stops it.
   stop             Stop the runner and keep the workspace and caches.
   remove           Confirm deregistration or removal of the runner and account.
@@ -1166,11 +1170,14 @@ Options (before or after the command):
   --job-env <NAME=VALUE>   Repeat for several. Replaces the file jobEnv map.
   --account <gha-user>    Override the local dedicated Linux account.
   --runner-name <name>    Override the local display name (not runner identity).
+  --job <id>              Consumer job for workflow output (default: e2e).
+  --ref <full-sha>        Published selector commit for workflow output.
+  --fallback <label>      Hosted fallback for workflow output (ubuntu-latest).
 
 Precedence: CLI options > project file / local profile > defaults.
 Only setup prompts for missing repository and labels in an interactive terminal.
 Setup offers to save supplied values after showing the files to be written.
-Other commands require a repository; setup, instructions and rename need labels.
+Other commands require a repository; setup/instructions/rename/workflow need labels.
 Remove --repository works without a checkout or file; no labels/name are needed.
 List needs no configuration and accepts no configuration options.
 List inspects gha-* accounts under /home/<account>/actions-runner.
@@ -1189,6 +1196,14 @@ PR-owner configuration (optional):
   otherwise => ubuntu-latest. This fallback requires a workflow selector.
   The variable is repository-wide. It does not enforce runner access or rename
   existing runners. This command does not create or edit workflows.
+
+Workflow generator:
+  workflow --job e2e prints a fragment to merge under your existing jobs: mapping.
+  Keep existing job steps, needs dependencies, permissions and required-check names.
+  Pass --ref with a reviewed full SHA containing the published selector workflow.
+  Without --ref, output is clearly marked TEMPLATE ONLY with a SHA placeholder.
+  Configure RUNNER_OWNER_ID and the two named GitHub App secrets as instructed.
+  No --write option, workflow changes, sudo or GitHub API calls are performed.
 
 Tokens are entered only in GitHub's config.sh, never as CLI options.
 Use --help, -h or help to show this message.`);
@@ -1214,6 +1229,7 @@ export async function runCli(args = process.argv.slice(2), {
             'runner-name': { type: 'string' }, label: { type: 'string', multiple: true },
             'job-env': { type: 'string', multiple: true },
             'configure-owner': { type: 'boolean' }, 'no-configure-owner': { type: 'boolean' },
+            job: { type: 'string' }, ref: { type: 'string' }, fallback: { type: 'string' },
         } });
         const seen = new Set();
         for (const token of tokens.filter(({ kind }) => kind === 'option')) {
@@ -1223,8 +1239,11 @@ export async function runCli(args = process.argv.slice(2), {
         }
         if (positionals.length !== 1) throw new Error('Pass exactly one command. See hedgehog-runner --help.');
         const [command] = positionals;
-        if (!['check', 'setup', 'instructions', 'configure-owner', 'rename', 'status', 'list', 'start', 'stop', 'remove'].includes(command)) {
+        if (!['check', 'setup', 'instructions', 'configure-owner', 'rename', 'status', 'list', 'workflow', 'start', 'stop', 'remove'].includes(command)) {
             throw new Error(`Unknown command: ${command}. See hedgehog-runner --help.`);
+        }
+        if (command !== 'workflow' && ['job', 'ref', 'fallback'].some((option) => seen.has(option))) {
+            throw new Error('--job, --ref and --fallback apply only to workflow.');
         }
         if (command === 'list') {
             if (seen.size) throw new Error('list accepts no configuration options; it lists all local installations.');
@@ -1249,6 +1268,10 @@ export async function runCli(args = process.argv.slice(2), {
             }
         }
         const config = await loadConfig(values.config, overrides, { ...configOptions, command, interactive, prompt, confirm });
+        if (command === 'workflow') {
+            console.log(workflowExample(config, { job: values.job, ref: values.ref, fallback: values.fallback }));
+            return 0;
+        }
         return await runnerFactory(config).main([command]);
     } catch (error) {
         console.error(error instanceof Error ? error.message : String(error));
