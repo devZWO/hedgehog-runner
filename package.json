@@ -1,0 +1,33 @@
+{
+  "name": "@devzwo/hedgehog-runner",
+  "version": "0.1.0",
+  "description": "Set up and manage a self-hosted GitHub Actions runner on your Ubuntu laptop.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "hedgehog-runner": "src/cli.mjs"
+  },
+  "files": [
+    "src/"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "test": "node --test",
+    "test:coverage": "node --test --experimental-test-coverage --test-coverage-include='src/*.mjs' --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=lcov.info",
+    "package:check": "bash scripts/check-package.sh"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/devZWO/hedgehog-runner.git"
+  },
+  "bugs": {
+    "url": "https://github.com/devZWO/hedgehog-runner/issues"
+  },
+  "homepage": "https://github.com/devZWO/hedgehog-runner#readme",
+  "keywords": ["github-actions", "self-hosted-runner", "cli", "ubuntu"],
+  "publishConfig": {
+    "access": "public"
+  }
+}
