@@ -1,6 +1,6 @@
 {
   "name": "@devzwo/hedgehog-runner",
-  "version": "0.1.0",
+  "version": "1.0.0-beta.1",
   "description": "Set up and manage a self-hosted GitHub Actions runner on your Ubuntu laptop.",
   "license": "MIT",
   "type": "module",

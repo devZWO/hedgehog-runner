@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+No changes yet.
+
+## Release v1.0.0-beta.1 (2026-11-20)
+
+Prepared for the first public beta. CLI, configuration and workflow interfaces
+may still change before the stable 1.0.0 release.
+
 ### Features
 
 - Set up and manage repository-scoped GitHub Actions runners on Ubuntu x86-64
@@ -34,6 +41,3 @@
 - Runner names are display names. Repository configuration and the dedicated
   Linux account identify the installation.
 - Installed runner versions are identified by `.hedgehog-runner-version` only.
-
-No release date is claimed yet. Before publishing, move these notes under a
-`Release v<package-version> (YYYY-MM-DD)` heading for the actual release.
