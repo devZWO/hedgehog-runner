@@ -9,3 +9,5 @@ npm install --cache "$tmp/npm-cache" --prefix "$tmp" --ignore-scripts --no-audit
 cd "$tmp"
 ./node_modules/.bin/hedgehog-runner --help | tee help.txt
 grep -q 'Usage: hedgehog-runner' help.txt
+grep -q -- '--job-env' help.txt
+grep -q 'List local installations' help.txt

@@ -1,8 +1,8 @@
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { userInfo } from 'node:os';
-import { isAbsolute, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 
 const reservedEnvironment = new Set([
     'HOME', 'USER', 'LOGNAME', 'SHELL', 'PATH', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS',
@@ -23,13 +23,13 @@ function validRepository(value) {
         !['.', '..'].includes(value.split('/')[1]);
 }
 
-export function validateConfig(project, local = {}) {
-    validateFields(project, ['version', 'repository', 'labels', 'configureOwner', 'jobEnv'], '.runnerconfig');
+export function validateConfig(project, local = {}, { requireLabels = true } = {}) {
+    validateFields(project, ['version', 'repository', 'labels', 'configureOwner', 'jobEnv'], '.hedgehog.json');
     validateFields(local, ['account', 'runnerName'], 'the local profile');
     const { version, repository, labels, configureOwner = false, jobEnv = {} } = project;
-    if (version !== 1) throw new Error('.runnerconfig must specify version 1.');
+    if (version !== 1) throw new Error('.hedgehog.json must specify version 1.');
     if (!validRepository(repository)) throw new Error('repository must be a GitHub owner/repository slug.');
-    if (!Array.isArray(labels) || !labels.length || labels.some((label) =>
+    if (!Array.isArray(labels) || (requireLabels && !labels.length) || labels.some((label) =>
         typeof label !== 'string' || !/^[a-z\d][a-z\d_.-]{0,62}$/i.test(label) ||
         ['self-hosted', 'linux', 'x64'].includes(label.toLowerCase()))) {
         throw new Error('labels must contain at least one custom runner label of up to 63 characters.');
@@ -79,24 +79,72 @@ function readJson(path, optional = false) {
     }
 }
 
-export function loadConfig(path, { cwd = process.cwd(), user = userInfo(), configHome = process.env.XDG_CONFIG_HOME } = {}) {
-    let projectPath;
-    if (path) {
-        projectPath = resolve(cwd, path);
-    } else {
-        const git = spawnSync('git', ['rev-parse', '--show-toplevel'], { cwd, encoding: 'utf8' });
-        if (git.status !== 0 || !git.stdout.trim()) {
-            throw new Error('Run from a Git checkout with a .runnerconfig or pass --config <file>.');
-        }
-        projectPath = join(git.stdout.trimEnd(), '.runnerconfig');
-    }
-
+/** Resolve once, validate every source, and persist only after showing and confirming writes. */
+export async function loadConfig(path, overrides = {}, {
+    command, cwd = process.cwd(), user = userInfo(), configHome = process.env.XDG_CONFIG_HOME,
+    interactive = false, prompt, confirm, log = console.log,
+} = {}) {
     if (user.uid === 0) throw new Error('Run Hedgehog Runner as your own user; it prompts for sudo where needed.');
-    const project = readJson(projectPath);
-    if (!validRepository(project?.repository)) throw new Error(`Invalid repository in ${projectPath}.`);
+    const git = spawnSync('git', ['rev-parse', '--show-toplevel'], { cwd, encoding: 'utf8' });
+    const root = git.status === 0 && git.stdout.trim() ? git.stdout.trimEnd() : cwd;
+    const projectPath = path ? resolve(cwd, path) : join(root, '.hedgehog.json');
+    // Explicit removal targets remain independent of a checkout's configuration.
+    const skipDiscovery = command === 'remove' && overrides.repository !== undefined && !path;
+    const exists = !skipDiscovery && existsSync(projectPath);
+    const source = skipDiscovery ? {} : readJson(projectPath, !path);
+    validateFields(source, ['version', 'repository', 'labels', 'configureOwner', 'jobEnv'], projectPath);
+    const placeholder = { version: 1, repository: 'validation/placeholder', labels: ['validation'] };
+    validateConfig({ ...placeholder, ...source });
+    const { account, runnerName, ...projectOverrides } = overrides;
+    const localOverrides = { ...(account === undefined ? {} : { account }), ...(runnerName === undefined ? {} : { runnerName }) };
+    validateConfig({ ...placeholder, ...projectOverrides }, localOverrides);
+    const project = { version: 1, configureOwner: false, jobEnv: {}, ...source, ...projectOverrides };
+    const requireLabels = ['setup', 'instructions', 'rename'].includes(command);
+    let prompted = false;
+    for (const [key, question, option] of [
+        ['repository', 'GitHub repository (owner/repo): ', '--repository owner/repo'],
+        ...(requireLabels ? [['labels', 'Custom runner labels (comma-separated): ', '--label laptop']] : []),
+    ]) {
+        if (project[key] !== undefined) continue;
+        if (command !== 'setup' || !interactive) {
+            throw new Error(`Missing ${key}. Set it in ${projectPath} or pass ${option}. `
+                + 'Run setup in an interactive terminal to enter missing setup values.');
+        }
+        while (true) {
+            const answer = (await prompt(question)).trim();
+            if (!answer) throw new Error(`Missing ${key}; setup cancelled before host changes.`);
+            const value = key === 'labels' ? answer.split(',').map((label) => label.trim()) : answer;
+            try { validateConfig({ ...placeholder, [key]: value }); }
+            catch (error) { log(error.message); continue; }
+            project[key] = value;
+            prompted = true;
+            break;
+        }
+    }
+    project.labels ??= [];
     const settings = configHome && isAbsolute(configHome) ? configHome : join(user.homedir, '.config');
     const profilePath = join(settings, 'hedgehog-runner', `${project.repository.toLowerCase()}.json`);
-    const config = validateConfig(project, readJson(profilePath, true));
+    const local = readJson(profilePath, true);
+    validateConfig(project, local, { requireLabels });
+    const profile = { ...local, ...localOverrides };
+    const config = validateConfig(project, profile, { requireLabels });
     if (config.account === user.username) throw new Error('The runner account must be separate from your own account.');
+    if (command === 'setup') {
+        log(`Configuration:\nRepository: ${config.repository}\nLinux account: ${config.account}\n`
+            + `Runner name: ${config.runnerName ?? '(derived during registration)'}\nLabels: ${config.labels.join(', ')}\n`
+            + `Configure owner: ${config.configureOwner}\nJob environment keys: ${Object.keys(config.jobEnv).join(', ') || '(none)'}`);
+        if (interactive && (prompted || Object.keys(overrides).length)) {
+            const files = [[projectPath, project], ...(Object.keys(localOverrides).length ? [[profilePath, profile]] : [])];
+            for (const [file, value] of files) log(`Save configuration to ${file}:\n${JSON.stringify(value, null, 2)}`);
+            if (await confirm('Save this configuration for subsequent commands?')) {
+                for (const [file, value] of files) {
+                    if (file === profilePath) mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+                    writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600, flag: existsSync(file) ? 'w' : 'wx' });
+                }
+            } else if (prompted || !exists) {
+                log('Configuration was not saved. Pass the same options again for subsequent commands.');
+            }
+        }
+    }
     return config;
 }

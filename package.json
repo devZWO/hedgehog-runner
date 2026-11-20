@@ -16,7 +16,8 @@
   "scripts": {
     "test": "node --test",
     "test:coverage": "node --test --experimental-test-coverage --test-coverage-include='src/*.mjs' --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=lcov.info",
-    "package:check": "bash scripts/check-package.sh"
+    "package:check": "bash scripts/check-package.sh",
+    "runner": "node src/cli.mjs"
   },
   "repository": {
     "type": "git",

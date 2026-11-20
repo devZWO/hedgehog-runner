@@ -136,6 +136,7 @@ function fakeHost({ prepared = true, registered = false, registeredName = 'old-r
             if (argv[0] === 'getfacl') return result(0, acl);
             if (command === `getent passwd ${account}`) return accountExists ? result(0, `${account}:x:1001:1001::${accountHome}:/bin/bash\n`) : result(2);
             if (command === 'sudo -n true') return result(sudoCached ? 0 : 1);
+            if (command === 'sudo -n -v') return result(sudoCached ? 0 : 1);
             if (command === `id -Gn ${account}`) return result(0, `${groups}\n`);
             if (command === `stat -c %a ${accountHome}`) return result(0, '700\n');
             if (command === `sudo -n -l -U ${account}`) return result(0, `User ${account} is not allowed to run sudo on laptop.\n`);
@@ -219,7 +220,7 @@ test('runner names identify both the host and the confirmed GitHub owner', () =>
     assert.throws(() => runnerName('laptop', 'not a login'), /valid GitHub login/);
 });
 
-test('a fully prepared host needs no changes, so prepare is idempotent', () => {
+test('a fully prepared host needs no changes, so setup is idempotent', () => {
     const host = fakeHost();
     const state = inspectHost(host);
     assert.deepEqual(blockingProblems(state), []);
@@ -260,7 +261,7 @@ test('the Lingering marker probe distinguishes missing directories, enabled mark
     }
 });
 
-test('prepare enables Lingering, then configures the owner, skips existing registration and shows status', async () => {
+test('setup enables Lingering, then configures the owner, skips existing registration and shows status', async () => {
     const host = fakeHost({ linger: false, registered: true });
     const github = fakeGitHubIo();
     const io = combinedRunnerIo(host, github);
@@ -268,7 +269,7 @@ test('prepare enables Lingering, then configures the owner, skips existing regis
     const original = console.log;
     console.log = (message) => output.push(message);
     try {
-        assert.equal(await main(['prepare'], io, {
+        assert.equal(await main(['setup'], io, {
             requireTerminal() {},
             async confirmChange() { return true; },
         }), 0);
@@ -288,7 +289,7 @@ test('prepare enables Lingering, then configures the owner, skips existing regis
     assert.deepEqual(planChanges(inspectHost(host)), []);
 });
 
-test('prepare with no host changes configures the owner, registers with its host and owner name, then shows status', async () => {
+test('setup with no host changes configures the owner, registers with its host and owner name, then shows status', async () => {
     const host = fakeHost({ registered: false });
     const github = fakeGitHubIo();
     const io = combinedRunnerIo(host, github);
@@ -296,7 +297,7 @@ test('prepare with no host changes configures the owner, registers with its host
     const original = console.log;
     console.log = (message) => output.push(message);
     try {
-        assert.equal(await main(['prepare'], io, {
+        assert.equal(await main(['setup'], io, {
             hostName: 'test-laptop',
             requireTerminal() {},
             async confirmChange() { return true; },
@@ -318,7 +319,7 @@ test('prepare with no host changes configures the owner, registers with its host
     assert.ok(github.calls.some((argv) => argv[0] === 'gh' && argv[1] === 'api' && argv[2] === '--paginate'));
 });
 
-test('prepare stops at a failed owner configuration and prints the manual resume command', async () => {
+test('setup stops at a failed owner configuration and prints the manual resume command', async () => {
     const host = fakeHost({ registered: false });
     const github = fakeGitHubIo({ failWrite: true });
     const io = combinedRunnerIo(host, github);
@@ -329,7 +330,7 @@ test('prepare stops at a failed owner configuration and prints the manual resume
     console.log = (message) => output.push(message);
     console.error = (message) => errors.push(message);
     try {
-        assert.equal(await main(['prepare'], io, {
+        assert.equal(await main(['setup'], io, {
             hostName: 'test-laptop',
             requireTerminal() {},
             async confirmChange() { return true; },
@@ -345,7 +346,7 @@ test('prepare stops at a failed owner configuration and prints the manual resume
     assert.equal(host.calls.filter((argv) => JSON.stringify(argv) === JSON.stringify(registrationCommand('test-laptop-installer'))).length, 0);
 });
 
-test('prepare stops after registration is declined and does not show status', async () => {
+test('setup stops after registration is declined and does not show status', async () => {
     const host = fakeHost({ registered: false });
     const github = fakeGitHubIo();
     const io = combinedRunnerIo(host, github);
@@ -356,7 +357,7 @@ test('prepare stops after registration is declined and does not show status', as
     console.log = (message) => output.push(message);
     console.error = (message) => errors.push(message);
     try {
-        assert.equal(await main(['prepare'], io, {
+        assert.equal(await main(['setup'], io, {
             hostName: 'test-laptop',
             requireTerminal() {},
             async confirmChange() { return true; },
@@ -372,7 +373,7 @@ test('prepare stops after registration is declined and does not show status', as
     assert.equal(host.calls.filter((argv) => JSON.stringify(argv) === JSON.stringify(registrationCommand('test-laptop-installer'))).length, 0);
 });
 
-test('prepare stops when registration fails and can resume at instructions', async () => {
+test('setup stops when registration fails and can resume at instructions', async () => {
     const host = fakeHost({ registered: false, registrationWorks: false });
     const github = fakeGitHubIo();
     const io = combinedRunnerIo(host, github);
@@ -380,7 +381,7 @@ test('prepare stops when registration fails and can resume at instructions', asy
     const originalError = console.error;
     console.error = (message) => errors.push(message);
     try {
-        assert.equal(await main(['prepare'], io, {
+        assert.equal(await main(['setup'], io, {
             hostName: 'test-laptop',
             requireTerminal() {},
             async confirmChange() { return true; },
@@ -394,7 +395,7 @@ test('prepare stops when registration fails and can resume at instructions', asy
     assert.equal(github.calls.some((argv) => argv[0] === 'gh' && argv[1] === 'api' && argv[2] === '--paginate'), false);
 });
 
-test('prepare stops if the final status cannot be displayed', async () => {
+test('setup stops if the final status cannot be displayed', async () => {
     const host = fakeHost({ registered: false });
     const github = fakeGitHubIo();
     const io = combinedRunnerIo(host, github);
@@ -413,7 +414,7 @@ test('prepare stops if the final status cannot be displayed', async () => {
     const originalError = console.error;
     console.error = (message) => errors.push(message);
     try {
-        assert.equal(await main(['prepare'], io, {
+        assert.equal(await main(['setup'], io, {
             hostName: 'test-laptop',
             requireTerminal() {},
             async confirmChange() { return true; },
@@ -545,13 +546,13 @@ test('rename explains recovery when new registration fails after deregistration'
     assert.equal(host.calls.some((argv) => argv[0] === 'sudo' && argv[1] === 'rm'), false);
 });
 
-test('prepare leaves Lingering disabled when its change is declined', async () => {
+test('setup leaves Lingering disabled when its change is declined', async () => {
     const host = fakeHost({ linger: false });
     const output = [];
     const original = console.log;
     console.log = (message) => output.push(message);
     try {
-        assert.equal(await main(['prepare'], host, {
+        assert.equal(await main(['setup'], host, {
             requireTerminal() {},
             async confirmChange() { return false; },
         }), 1);
@@ -562,13 +563,13 @@ test('prepare leaves Lingering disabled when its change is declined', async () =
     assert.match(output.join('\n'), /Remaining changes were not applied/);
 });
 
-test('prepare creates the account before separately asking to enable Lingering', async () => {
+test('setup creates the account before separately asking to enable Lingering', async () => {
     const host = fakeHost({ prepared: false, linger: false });
     const original = console.log;
     let confirmations = 0;
     console.log = () => {};
     try {
-        assert.equal(await main(['prepare'], host, {
+        assert.equal(await main(['setup'], host, {
             requireTerminal() {},
             async confirmChange() { return ++confirmations === 1; },
         }), 1);
@@ -580,13 +581,13 @@ test('prepare creates the account before separately asking to enable Lingering',
     assert.equal(host.calls.some((argv) => argv.join(' ') === `sudo loginctl enable-linger ${account}`), false);
 });
 
-test('prepare enables Lingering after creating an account when both changes are confirmed', async () => {
+test('setup enables Lingering after creating an account when both changes are confirmed', async () => {
     const host = fakeHost({ prepared: false, linger: false });
     const original = console.log;
     let confirmations = 0;
     console.log = () => {};
     try {
-        assert.equal(await main(['prepare'], host, {
+        assert.equal(await main(['setup'], host, {
             requireTerminal() {},
             async confirmChange() { return ++confirmations <= 2; },
         }), 1);
@@ -599,7 +600,7 @@ test('prepare enables Lingering after creating an account when both changes are 
     assert.equal(inspectHost(host).lingering.enabled, true);
 });
 
-test('prepare fails if enabling Lingering does not take effect', async () => {
+test('setup fails if enabling Lingering does not take effect', async () => {
     const host = fakeHost({ linger: false, enableWorks: false });
     const originalLog = console.log;
     const originalError = console.error;
@@ -607,7 +608,7 @@ test('prepare fails if enabling Lingering does not take effect', async () => {
     console.log = () => {};
     console.error = (message) => errors.push(message);
     try {
-        assert.equal(await main(['prepare'], host, {
+        assert.equal(await main(['setup'], host, {
             requireTerminal() {},
             async confirmChange() { return true; },
         }), 1);
@@ -628,7 +629,7 @@ test('an unreadable Lingering state never counts as a fully prepared host', asyn
     console.error = (message) => errors.push(message);
     try {
         assert.equal(await main(['check'], host), 0);
-        assert.equal(await main(['prepare'], host, {
+        assert.equal(await main(['setup'], host, {
             requireTerminal() {},
             async confirmChange() { return assert.fail('must not ask to apply an unknown state'); },
         }), 1);
@@ -641,26 +642,26 @@ test('an unreadable Lingering state never counts as a fully prepared host', asyn
     assert.match(errors.join('\n'), /Could not verify Lingering/);
 });
 
-test('prepare stops with a sudo/access hint when account directories cannot be inspected', async () => {
+test('setup stops with a sudo/access hint when account directories cannot be inspected', async () => {
     const host = fakeHost({ accountDirectoryProbeFailureAt: 2 });
     const errors = [];
     const originalError = console.error;
     console.error = (message) => errors.push(message);
     try {
-        assert.equal(await main(['prepare'], host, {
+        assert.equal(await main(['setup'], host, {
             requireTerminal() {},
             async confirmChange() { return assert.fail('must not plan changes from an unknown directory state'); },
         }), 1);
     } finally {
         console.error = originalError;
     }
-    assert.ok(host.calls.some((argv) => argv.join(' ') === 'sudo -v'));
+    assert.ok(host.calls.some((argv) => argv.join(' ') === 'sudo -n -v'));
     assert.match(errors.join('\n'), /Could not inspect.*account-owned files/i);
-    assert.match(errors.join('\n'), /already ran `sudo -v`/);
+    assert.match(errors.join('\n'), /sudo authentication was already checked/);
     assert.match(errors.join('\n'), /Permission denied while inspecting account directories/);
 });
 
-test('prepare stops with an access hint if account directory inspection fails after a change', async () => {
+test('setup stops with an access hint if account directory inspection fails after a change', async () => {
     const host = fakeHost({ prepared: false, accountDirectoryProbeFailureAt: 1 });
     const errors = [];
     const originalLog = console.log;
@@ -668,7 +669,7 @@ test('prepare stops with an access hint if account directory inspection fails af
     console.log = () => {};
     console.error = (message) => errors.push(message);
     try {
-        assert.equal(await main(['prepare'], host, {
+        assert.equal(await main(['setup'], host, {
             requireTerminal() {},
             async confirmChange() { return true; },
         }), 1);
@@ -1259,7 +1260,7 @@ test('help aliases explain every command without inspecting or changing the host
     const helpText = output[0];
     const help = helpText.replace(/\s+/g, ' ');
     assert.ok(helpText.split('\n').every((line) => line.length <= 88), 'help lines should fit a typical terminal width');
-    for (const command of ['check', 'prepare', 'instructions', 'configure-owner', 'rename', 'status', 'start', 'stop', 'remove']) {
+    for (const command of ['check', 'setup', 'instructions', 'configure-owner', 'rename', 'status', 'start', 'stop', 'remove']) {
         assert.match(help, new RegExp(`\\b${command}\\b`));
     }
     assert.match(help, new RegExp(ownerVariableName));
@@ -1268,10 +1269,10 @@ test('help aliases explain every command without inspecting or changing the host
 });
 
 
-test('prepare skips the owner feature when disabled and uses a local runner name', async () => {
+test('setup skips the owner feature when disabled and uses a local runner name', async () => {
     const host = fakeHost();
     const runner = createRunner({ ...config, configureOwner: false, runnerName: 'local-laptop' });
-    const result = await runner.main(['prepare'], host, {
+    const result = await runner.main(['setup'], host, {
         requireTerminal() {},
         async confirmRegistration() { return true; },
         async promptValue() { assert.fail('A local runner name should be sufficient'); },
@@ -1281,11 +1282,90 @@ test('prepare skips the owner feature when disabled and uses a local runner name
     assert.ok(!host.calls.some((argv) => argv[0] === 'gh'));
 });
 
-test('prepare rejects a registration that belongs to another repository', async () => {
+test('setup rejects a registration that belongs to another repository', async () => {
     const host = fakeHost({ registered: true, registrationUrl: 'https://github.com/unrelated/other' });
-    assert.equal(await main(['prepare'], host, {
+    assert.equal(await main(['setup'], host, {
         requireTerminal() {},
         async confirmChange() { assert.fail('A mismatched registration should stop setup'); },
     }), 1);
     assert.ok(!host.calls.some((argv) => argv[0] === 'gh' || argv[1] === 'useradd'));
+});
+
+test('remove shows the stored runner identity before confirming deregistration', async () => {
+    const host = fakeHost({ registered: true, registeredName: 'shared-display-name' });
+    const output = [];
+    const executed = [];
+    const originalLog = console.log;
+    const execute = host.exec.bind(host);
+    host.exec = (argv) => { executed.push(argv); return execute(argv); };
+    console.log = (message) => output.push(message);
+    let confirmations = 0;
+    try {
+        assert.equal(await main(['remove'], host, {
+            requireTerminal() {},
+            async confirmChange() {
+                assert.match(output.join('\n'), /Removal target:.*example-org\/example-repo.*shared-display-name.*gha-example.*\/home\/gha-example\/actions-runner/s);
+                return ++confirmations === 1;
+            },
+        }), 0);
+    } finally {
+        console.log = originalLog;
+    }
+    assert.equal(confirmations, 3);
+    assert.deepEqual(executed, [removalCommand()]);
+});
+
+test('setup and remove authenticate expired sudo credentials before confirmed host changes', async () => {
+    const originalLog = console.log;
+    console.log = () => {};
+    try {
+        for (const command of ['setup', 'remove']) {
+            const host = fakeHost({ registered: true, sudoCached: false, homeMode: '755' });
+            const run = host.run.bind(host);
+            const executed = [];
+            let authenticated = false;
+            let confirmations = 0;
+            host.run = (argv) => {
+                if (authenticated && ['sudo -n true', 'sudo -n -v'].includes(argv.join(' '))) return { status: 0, stdout: '', stderr: '' };
+                return run(argv);
+            };
+            host.exec = (argv) => {
+                executed.push(argv);
+                assert.deepEqual(argv, ['sudo', '-v'], 'No setup state may change without confirmation');
+                authenticated = true;
+            };
+            assert.equal(await main([command], host, {
+                requireTerminal() {},
+                async confirmChange() { assert.equal(authenticated, true); confirmations++; return false; },
+            }), 1);
+            assert.ok(confirmations > 0);
+            assert.deepEqual(executed, [['sudo', '-v']]);
+        }
+    } finally { console.log = originalLog; }
+});
+
+test('remove rejects missing accounts, mismatched registrations and unreadable metadata before confirmation', async () => {
+    const errors = [];
+    const originalError = console.error;
+    console.error = (message) => errors.push(message);
+    try {
+        for (const [settings, message] of [
+            [{ prepared: false }, /Linux account gha-example does not exist/],
+            [{ registered: true, registrationUrl: 'https://github.com/unrelated/other' }, /Registered repository: https:\/\/github.com\/unrelated\/other/],
+            [{ registered: true, registrationUrl: null }, /Could not read valid registration metadata/],
+            [{ registered: true, listenerRunning: true }, /runner is running/],
+        ]) {
+            const host = fakeHost(settings);
+            const executed = [];
+            host.exec = (argv) => executed.push(argv);
+            assert.equal(await main(['remove'], host, {
+                requireTerminal() {},
+                async confirmChange() { assert.fail('An invalid removal target must not reach confirmation'); },
+            }), 1);
+            assert.match(errors.at(-1), message);
+            assert.deepEqual(executed, []);
+        }
+    } finally {
+        console.error = originalError;
+    }
 });

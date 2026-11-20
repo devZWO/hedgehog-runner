@@ -6,6 +6,7 @@ import { readFileSync } from 'node:fs';
 import { hostname, tmpdir, userInfo } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
+import { parseArgs } from 'node:util';
 import { loadConfig } from './config.mjs';
 
 export function createRunner(config) {
@@ -69,7 +70,7 @@ export function createRunner(config) {
         const result = io.run(['id', '-u', account]);
         const uid = result.stdout.trim();
         if (result.status !== 0 || !/^\d+$/.test(uid) || uid === '0') {
-            throw new Error(`Could not resolve a non-root UID for ${account}; prepare the service account first.`);
+            throw new Error(`Could not resolve a non-root UID for ${account}; run \`hedgehog-runner setup\` to create the service account first.`);
         }
         return uid;
     }
@@ -290,10 +291,10 @@ export function createRunner(config) {
             '',
             ...(configureOwner ? ['Use `hedgehog-runner configure-owner` to set RUNNER_OWNER_ID for workflows that use it.', ''] : []),
             `1. Open ${runnersSettingsUrl} and choose "New self-hosted runner".`,
-            '2. Select "Linux" and architecture "x64". Skip GitHub\'s download/extract commands: `hedgehog-runner prepare` already installed the pinned, checksum-verified runner.',
+            '2. Select "Linux" and architecture "x64". Skip GitHub\'s download/extract commands: `hedgehog-runner setup` already installed the pinned, checksum-verified runner.',
             '3. In GitHub\'s "Configure" block, copy only the value after `--token`. It is a short-lived registration token (about one hour); do not paste it into files, chats or tickets.',
             `4. Answer "y" below. The script runs config.sh as ${account} with --url ${repositoryUrl}, --name ${name}, --labels ${runnerLabel} and --disableupdate. The name identifies the runner in GitHub. Paste the token only when config.sh asks for it. If config.sh asks for a runner group, groups organize self-hosted runners for an organization or enterprise and control which repositories may use them. This is separate from the ${runnerLabel} label. For this repository-scoped runner, accept the offered "Default" group by pressing Enter; do not type a new group. GitHub then stores the runner's own credentials in ${runnerDirectory}; the registration token itself is not stored.`,
-            '5. Lingering is handled during `prepare`; after the guided registration and status steps complete, start the runner in a dedicated terminal with `hedgehog-runner start` and keep that terminal open while jobs are queued or running.',
+            '5. Lingering is handled during `setup`; after the guided registration and status steps complete, start the runner in a dedicated terminal with `hedgehog-runner start` and keep that terminal open while jobs are queued or running.',
             `6. Check on the page from step 1 that ${name} is "Idle" with the labels self-hosted, Linux, X64 and ${runnerLabel}.`,
             '7. Stop with Ctrl+C in that terminal (or `hedgehog-runner stop`). To deregister, open the runner on GitHub, choose "Remove", copy the removal token and run `hedgehog-runner remove`.',
         ].join('\n');
@@ -413,8 +414,14 @@ export function createRunner(config) {
     function assertMatchingRegistration(io, state) {
         if (!state.files.configured) return;
         const registration = runnerRegistration(io);
+        if (!registration?.gitHubUrl) {
+            throw new Error(`Could not read valid registration metadata from ${runnerDirectory}/.runner `
+                + `as ${account}; cannot verify the target repository ${repositoryUrl}. No runner changes were made.`);
+        }
         if (registration?.gitHubUrl?.replace(/\/$/, '').toLowerCase() !== repositoryUrl.toLowerCase()) {
-            throw new Error(`Existing runner registration does not match ${repositoryUrl}; check your local profile.`);
+            throw new Error(`Existing runner registration does not match ${repositoryUrl}. `
+                + `Registered repository: ${registration.gitHubUrl}. Account: ${account}. Directory: ${runnerDirectory}. `
+                + 'Check your configuration, local profile or --account selection. No runner changes were made.');
         }
     }
 
@@ -457,7 +464,7 @@ export function createRunner(config) {
         ];
         if (state.account.exists && !state.files.known) {
             const detail = state.files.error ? `: ${state.files.error}` : ' (sudo not cached)';
-            lines.push(`info account files of ${account} not inspected${detail}; run \`sudo -v\` and retry; prepare will stop rather than guess`);
+            lines.push(`info account files of ${account} not inspected${detail}; run \`sudo -v\` and retry; setup will stop rather than guess`);
         } else if (state.account.exists) {
             lines.push(`${mark(state.files.configured)} runner ${state.files.configured ? 'registered' : 'not registered (see `hedgehog-runner instructions`)'}`);
         }
@@ -473,7 +480,7 @@ export function createRunner(config) {
         } else if (changes.length) {
             const remaining = changes.length === 1 ? 'change remains' : 'changes remain';
             lines.push('', `Setup incomplete: ${changes.length} planned ${remaining}`
-                + ' (apply with `hedgehog-runner prepare` in a terminal):');
+                + ' (apply with `hedgehog-runner setup` in a terminal):');
         } else if (problems.length) {
             lines.push('', 'No setup changes are planned; resolve the blocking problems before using the runner.');
         } else {
@@ -628,8 +635,8 @@ export function createRunner(config) {
     }
 
     function authenticateSudo(io) {
-        console.log('sudo is used for account-level and administrative steps; each change is confirmed separately.');
-        io.exec(['sudo', '-v']);
+        // Lifecycle callers have already required an interactive terminal.
+        ensureSudo(io, { interactive: true });
     }
 
     async function applyChange(change, io) {
@@ -663,7 +670,7 @@ export function createRunner(config) {
         if (!state.account.exists || state.files.known) return;
         const detail = state.files.error ? ` Inspection detail: ${state.files.error}.` : '';
         throw new Error(`Could not inspect account-owned files for ${account}.${detail} `
-            + '`prepare` already ran `sudo -v`. If credentials expired, run `sudo -v` in the same terminal and retry. '
+            + 'sudo authentication was already checked. If credentials expired, run `sudo -v` in the same terminal and retry. '
             + 'If it persists, inspect the sudo/account-access error; preparation stopped without planning changes from this unknown state.');
     }
 
@@ -707,17 +714,17 @@ export function createRunner(config) {
             console.log(renderCheck(state, changes, problems));
             return problems.length ? 1 : 0;
         },
-        async prepare(io, options = {}) {
+        async setup(io, options = {}) {
             const { requireTerminal: requireInteractive = requireTerminal, confirmChange = confirm } = options;
             inspectHost(io);
-            requireInteractive('prepare');
+            requireInteractive('setup');
             authenticateSudo(io);
             let state = inspectHost(io);
             failOnProblems(blockingProblems(state));
             requireAccountFilesKnown(state);
             if (!state.lingering.known) throw new Error('Could not verify Lingering; inspect the systemd linger directory and retry.');
             assertMatchingRegistration(io, state);
-            if (state.processes.listener) throw new Error('Stop the runner before running prepare.');
+            if (state.processes.listener) throw new Error('Stop the runner before running setup.');
             const initial = planChanges(state);
             if (!initial.length) {
                 console.log('No host changes required.');
@@ -730,7 +737,7 @@ export function createRunner(config) {
                 if (applied.has(change.id)) throw new Error(`Change '${change.id}' did not take effect; inspect the host manually.`);
                 console.log(renderChange(change, applied.size + 1, applied.size + changes.length));
                 if (!await confirmChange('Apply this change?')) {
-                    console.log('Stopped. Remaining changes were not applied. Resume with `hedgehog-runner prepare` when ready.');
+                    console.log('Stopped. Remaining changes were not applied. Resume with `hedgehog-runner setup` when ready.');
                     return 1;
                 }
                 await applyChange(change, io);
@@ -765,7 +772,7 @@ export function createRunner(config) {
             requireAccountFilesKnown(state);
             assertMatchingRegistration(io, state);
             if (!state.lingering.known) throw new Error('Could not verify Lingering; inspect the systemd linger directory and retry.');
-            if (planChanges(state).length) throw new Error('Host is not fully prepared; run `hedgehog-runner prepare` first.');
+            if (planChanges(state).length) throw new Error('Host is not fully prepared; run `hedgehog-runner setup` first.');
             if (state.files.configured) {
                 const registration = runnerRegistration(io);
                 console.log(`\nThe runner is already registered as ${registration?.agentName ?? 'an unreadable name'}; it was not changed.`);
@@ -788,7 +795,7 @@ export function createRunner(config) {
             promptValue: requestValue = promptValue,
             onConfigured = () => {},
         } = {}) {
-            if (!configureOwner) throw new Error('Enable configureOwner in .runnerconfig to configure RUNNER_OWNER_ID.');
+            if (!configureOwner) throw new Error('Enable configureOwner in .hedgehog.json to configure RUNNER_OWNER_ID.');
             requireInteractive('configure-owner');
             const cliInstalled = io.run(['gh', '--version']).status === 0;
             let cliAuthenticated = false;
@@ -922,7 +929,7 @@ export function createRunner(config) {
             state = inspectHost(io);
             failOnProblems(blockingProblems(state));
             if (!state.lingering.known) throw new Error('Could not verify Lingering; inspect the systemd linger directory and retry.');
-            if (planChanges(state).length) throw new Error('Host is not fully prepared; run `hedgehog-runner prepare` first.');
+            if (planChanges(state).length) throw new Error('Host is not fully prepared; run `hedgehog-runner setup` first.');
             requireAccountFilesKnown(state);
             if (!state.files.configured) throw new Error('The runner is not registered; run `hedgehog-runner instructions` first.');
             const systemd = assertSystemdUserManager(io);
@@ -964,20 +971,27 @@ export function createRunner(config) {
             console.log('Stopped the runner; caches were kept.');
             return 0;
         },
-        async remove(io) {
-            requireTerminal('remove');
+        async remove(io, { requireTerminal: requireInteractive = requireTerminal, confirmChange = confirm } = {}) {
+            requireInteractive('remove');
             authenticateSudo(io);
             const state = inspectHost(io);
+            if (!state.account.exists) {
+                throw new Error(`Cannot remove runner for ${repository}: Linux account ${account} does not exist. `
+                    + `Expected directory: ${runnerDirectory}. Check the repository, local profile or --account selection.`);
+            }
             if (state.processes.listener) {
                 throw new Error('The runner is running; stop it first (Ctrl+C or `hedgehog-runner stop`).');
             }
             requireAccountFilesKnown(state);
             failOnProblems(blockingProblems(state));
             assertMatchingRegistration(io, state);
+            const registration = state.files.configured ? runnerRegistration(io) : undefined;
+            console.log(`Removal target:\nRepository: ${repositoryUrl}\nRunner: ${registration?.agentName ?? '(not registered)'}\n`
+                + `Linux account: ${account}\nDirectory: ${runnerDirectory}`);
             let deregistered = !state.files.configured;
             if (state.files.configured) {
                 console.log(`Open ${runnersSettingsUrl}, select the runner, choose "Remove" and copy the removal token. config.sh will ask for it.`);
-                if (await confirm('Deregister the runner from GitHub now?')) {
+                if (await confirmChange('Deregister the runner from GitHub now?')) {
                     try { io.exec(removalCommand()); deregistered = true; } catch (error) { console.error(error.message); }
                 }
             }
@@ -989,11 +1003,11 @@ export function createRunner(config) {
             if (state.account.exists) {
                 const remove = runnerDirectoryRemovalCommand();
                 console.log(`$ ${formatCommand(remove)}`);
-                if (await confirm('Delete the runner directory? The systemd-managed runtime directory will not be deleted.')) io.exec(remove);
+                if (await confirmChange('Delete the runner directory? The systemd-managed runtime directory will not be deleted.')) io.exec(remove);
                 const userdel = ['sudo', 'userdel', '--remove', account];
                 console.log(`$ ${formatCommand(userdel)}  (also deletes the workspace and caches of ${account})`);
-                if (await confirm(`Delete account ${account} and its home directory?`)) {
-                    if (!await confirm(`Disable systemd lingering for ${account} before deleting the account?`)) {
+                if (await confirmChange(`Delete account ${account} and its home directory?`)) {
+                    if (!await confirmChange(`Disable systemd lingering for ${account} before deleting the account?`)) {
                         throw new Error('Account deletion stopped; disable lingering manually before removing the account.');
                     }
                     io.exec(['sudo', 'loginctl', 'disable-linger', account]);
@@ -1023,7 +1037,7 @@ export function createRunner(config) {
             return await command(io, options);
         } catch (error) {
             console.error(error instanceof Error ? error.message : String(error));
-            if (name === 'prepare') console.error('Resume with `hedgehog-runner prepare` after resolving the issue.');
+            if (name === 'setup') console.error('Resume with `hedgehog-runner setup` after resolving the issue.');
             return 1;
         }
     }
@@ -1037,41 +1051,205 @@ export function createRunner(config) {
     };
 }
 
+/** sudo owns password input; the CLI never reads or stores it. Returns whether authentication was refreshed. */
+export function ensureSudo(io, { interactive = Boolean(process.stdin.isTTY && process.stdout.isTTY), log = console.log } = {}) {
+    if (io.run(['sudo', '-n', '-v']).status === 0) return false;
+    if (!interactive) {
+        throw new Error('sudo authentication is required, but no interactive terminal is available. '
+            + 'Run this command in a terminal (for example WebStorm Terminal, Alt+F12). '
+            + 'You can also run sudo -v in the same terminal before retrying.');
+    }
+    log('sudo authentication is needed to access the dedicated runner accounts. Enter your password at the sudo prompt.');
+    try { io.exec(['sudo', '-v']); }
+    catch {
+        throw new Error('sudo authentication failed or was cancelled. Check the sudo message above and your sudo permissions, then retry.');
+    }
+    return true;
+}
+
+export function listInstalledRunners(io = {
+    run(argv) {
+        const result = spawnSync(argv[0], argv.slice(1), { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+        return { status: result.status, stdout: result.stdout ?? '', stderr: result.stderr ?? result.error?.message ?? '' };
+    },
+    exec(argv) {
+        const result = spawnSync(argv[0], argv.slice(1), { stdio: 'inherit' });
+        if (result.error || result.status !== 0) throw new Error('sudo failed');
+    },
+}, options = {}) {
+    const accounts = io.run(['getent', 'passwd']);
+    if (accounts.status !== 0) throw new Error('Could not enumerate Linux accounts with getent passwd.');
+    const groups = new Map();
+    const unverified = [];
+    const unregistered = [];
+    let authenticationChecked = false;
+    let authenticationError;
+    const safeText = (value) => value.replace(/[\u0000-\u001f\u007f-\u009f]/g, '?');
+    for (const line of accounts.stdout.split('\n').filter(Boolean)) {
+        const [account, , uid, , , home] = line.split(':');
+        if (!/^gha-[a-z\d][a-z\d-]{0,26}$/.test(account)) continue;
+        const directory = `/home/${account}/actions-runner`;
+        if (!/^[1-9]\d*$/.test(uid) || home !== `/home/${account}`) {
+            unverified.push(`${account}: unexpected UID or home directory`);
+            continue;
+        }
+        const runner = createRunner({ account, repository: 'inventory/placeholder', labels: [], jobEnv: {} });
+        const probeCommand = runner.asAccount(['sh', '-c', [
+            'test -x "$HOME" || exit 4',
+            'if [ ! -e "$1" ]; then exit 3; fi',
+            'test -d "$1" && test -r "$1" && test -x "$1" || exit 4',
+            'if [ -e "$1/.runner" ]; then cat "$1/.runner"; else exit 2; fi',
+        ].join('\n'), 'sh', directory], { nonInteractive: true });
+        let probe = io.run(probeCommand);
+        if (![0, 2, 3].includes(probe.status) && !authenticationChecked) {
+            authenticationChecked = true;
+            try {
+                if (ensureSudo(io, options)) probe = io.run(probeCommand);
+            } catch (error) { authenticationError = error.message; }
+        }
+        if (probe.status === 3) continue;
+        if (probe.status === 2) {
+            unregistered.push(`${account} — ${directory}`);
+            continue;
+        }
+        if (probe.status !== 0) {
+            const detail = probe.stderr?.trim() || `account probe exited with status ${probe.status ?? 'unknown'}`;
+            unverified.push(`${account}: could not inspect ${directory} as the dedicated account: ${safeText(detail).slice(0, 300)}`);
+            continue;
+        }
+        try {
+            const { agentName, gitHubUrl } = JSON.parse(probe.stdout.replace(/^\uFEFF/, ''));
+            const match = typeof gitHubUrl === 'string' && /^https:\/\/github\.com\/([a-z\d][a-z\d-]*\/[a-z\d_.-]+)\/?$/i.exec(gitHubUrl);
+            if (!match || ['.', '..'].includes(match[1].split('/')[1]) || typeof agentName !== 'string' || !agentName) throw new Error();
+            const repository = match[1].toLowerCase();
+            if (!groups.has(repository)) groups.set(repository, []);
+            groups.get(repository).push(`${safeText(agentName)} — ${account} — ${directory}`);
+        } catch {
+            unverified.push(`${account}: invalid registration metadata in ${directory}/.runner`);
+        }
+    }
+    const lines = [];
+    for (const repository of [...groups.keys()].sort()) {
+        lines.push(`${repository}:`, ...groups.get(repository).sort().map((entry) => `  ${entry}`));
+    }
+    if (unregistered.length) lines.push('Unregistered installations:', ...unregistered.sort().map((entry) => `  ${entry}`));
+    if (unverified.length) lines.push('Unverified accounts (inventory incomplete):', ...unverified.sort().map((entry) => `  ${entry}`),
+        'For invalid metadata or unexpected account settings, inspect the reported account.');
+    if (authenticationError) lines.push(authenticationError);
+    if (!lines.length) lines.push('No installed Hedgehog runners found.');
+    return { output: lines.join('\n'), code: unverified.length ? 1 : 0 };
+}
+
 function showHelp() {
     console.log(`Hedgehog Runner
 
-Usage: hedgehog-runner [--config <file>] <command>
+Usage: hedgehog-runner <command> [options]
 
   check            Inspect the host and show pending setup changes.
-  prepare          Confirm setup changes and guide registration.
+  setup            Confirm setup changes and guide registration.
   instructions     Show registration steps and offer to register interactively.
-  configure-owner  Configure RUNNER_OWNER_ID when enabled in .runnerconfig.
+  configure-owner  Select whose PRs a compatible workflow should prefer locally.
+                   Set their numeric GitHub ID as repository RUNNER_OWNER_ID.
   rename           Confirm deregistration and re-registration under a new name.
   status           Show local registration, process and optional owner status.
+  list             List local installations grouped by repository (read-only).
   start            Start the runner in the foreground. Ctrl+C stops it.
   stop             Stop the runner and keep the workspace and caches.
   remove           Confirm deregistration or removal of the runner and account.
 
-Use --help or -h to show this message.`);
+Options (before or after the command):
+  --config <file>          Use this JSON file instead of checkout .hedgehog.json.
+  --repository <org/repo>  Select the GitHub repository.
+  --label <label>          Custom label; repeat for several. Replaces file labels.
+  --configure-owner       Enable the optional PR-owner configuration step.
+  --no-configure-owner    Disable that step.
+  --job-env <NAME=VALUE>   Repeat for several. Replaces the file jobEnv map.
+  --account <gha-user>    Override the local dedicated Linux account.
+  --runner-name <name>    Override the local display name (not runner identity).
+
+Precedence: CLI options > project file / local profile > defaults.
+Only setup prompts for missing repository and labels in an interactive terminal.
+Setup offers to save supplied values after showing the files to be written.
+Other commands require a repository; setup, instructions and rename need labels.
+Remove --repository works without a checkout or file; no labels/name are needed.
+List needs no configuration and accepts no configuration options.
+List inspects gha-* accounts under /home/<account>/actions-runner.
+List, setup and remove request sudo authentication in a terminal when needed.
+Without a terminal, list reports unreadable accounts; partial results exit 1.
+
+PR-owner configuration (optional):
+  Select a GitHub account whose PRs should prefer your local runner, for example
+  to run your own E2E tests on your laptop while other PRs use hosted runners.
+  Requires configureOwner: true or --configure-owner; setup includes the step.
+  It can also run independently, without a local runner or registration.
+  Authenticated gh can set RUNNER_OWNER_ID after confirmation; otherwise the CLI
+  verifies a username publicly and guides manual setup in GitHub settings.
+  Your workflow must read vars.RUNNER_OWNER_ID and implement runner selection.
+  For example: same-repository owner PR + online, idle matching runner => local;
+  otherwise => ubuntu-latest. This fallback requires a workflow selector.
+  The variable is repository-wide. It does not enforce runner access or rename
+  existing runners. This command does not create or edit workflows.
+
+Tokens are entered only in GitHub's config.sh, never as CLI options.
+Use --help, -h or help to show this message.`);
     return 0;
 }
 
-export async function runCli(args = process.argv.slice(2)) {
+async function configurationPrompt(question) {
+    const terminal = createInterface({ input: process.stdin, output: process.stdout });
+    try { return await terminal.question(question); }
+    finally { terminal.close(); }
+}
+
+export async function runCli(args = process.argv.slice(2), {
+    configOptions, runnerFactory = createRunner, listIo,
+    interactive = Boolean(process.stdin.isTTY && process.stdout.isTTY),
+    prompt = configurationPrompt,
+    confirm = async (question) => /^y(es)?$/i.test((await configurationPrompt(`${question} [y/N] `)).trim()),
+} = {}) {
     if (!args.length || args.some((arg) => ['help', '--help', '-h'].includes(arg))) return showHelp();
-    const argv = [...args];
-    const index = argv.indexOf('--config');
-    let configPath;
-    if (index !== -1) {
-        configPath = argv[index + 1];
-        if (!configPath || configPath.startsWith('-')) {
-            console.error('--config requires a file path.');
-            return 1;
-        }
-        argv.splice(index, 2);
-    }
     try {
-        if (argv.length !== 1) throw new Error('Pass exactly one command. See hedgehog-runner --help.');
-        return await createRunner(loadConfig(configPath)).main(argv);
+        const { values, positionals, tokens } = parseArgs({ args, allowPositionals: true, tokens: true, options: {
+            config: { type: 'string' }, repository: { type: 'string' }, account: { type: 'string' },
+            'runner-name': { type: 'string' }, label: { type: 'string', multiple: true },
+            'job-env': { type: 'string', multiple: true },
+            'configure-owner': { type: 'boolean' }, 'no-configure-owner': { type: 'boolean' },
+        } });
+        const seen = new Set();
+        for (const token of tokens.filter(({ kind }) => kind === 'option')) {
+            if (seen.has(token.name) && !['label', 'job-env'].includes(token.name)) throw new Error(`Pass --${token.name} only once.`);
+            seen.add(token.name);
+            if (typeof token.value === 'string' && (!token.value || token.value.startsWith('-'))) throw new Error(`--${token.name} requires a value.`);
+        }
+        if (positionals.length !== 1) throw new Error('Pass exactly one command. See hedgehog-runner --help.');
+        const [command] = positionals;
+        if (!['check', 'setup', 'instructions', 'configure-owner', 'rename', 'status', 'list', 'start', 'stop', 'remove'].includes(command)) {
+            throw new Error(`Unknown command: ${command}. See hedgehog-runner --help.`);
+        }
+        if (command === 'list') {
+            if (seen.size) throw new Error('list accepts no configuration options; it lists all local installations.');
+            const result = listInstalledRunners(listIo, { interactive });
+            console.log(result.output);
+            return result.code;
+        }
+        if (values['configure-owner'] && values['no-configure-owner']) throw new Error('Choose either --configure-owner or --no-configure-owner.');
+        const overrides = {};
+        for (const [option, field] of [['repository', 'repository'], ['account', 'account'], ['runner-name', 'runnerName'], ['label', 'labels']]) {
+            if (values[option] !== undefined) overrides[field] = values[option];
+        }
+        if (values['configure-owner'] !== undefined || values['no-configure-owner'] !== undefined) overrides.configureOwner = Boolean(values['configure-owner']);
+        if (values['job-env']) {
+            overrides.jobEnv = {};
+            for (const entry of values['job-env']) {
+                const separator = entry.indexOf('=');
+                if (separator < 1) throw new Error('--job-env requires NAME=VALUE.');
+                const key = entry.slice(0, separator);
+                if (Object.hasOwn(overrides.jobEnv, key)) throw new Error(`Duplicate --job-env key: ${key}.`);
+                Object.defineProperty(overrides.jobEnv, key, { value: entry.slice(separator + 1), enumerable: true });
+            }
+        }
+        const config = await loadConfig(values.config, overrides, { ...configOptions, command, interactive, prompt, confirm });
+        return await runnerFactory(config).main([command]);
     } catch (error) {
         console.error(error instanceof Error ? error.message : String(error));
         return 1;
