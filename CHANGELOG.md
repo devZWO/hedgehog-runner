@@ -4,6 +4,16 @@
 
 No changes yet.
 
+## Release v1.0.0-beta.2 (2026-11-20)
+
+### Release packaging
+
+- Prepare the first automated npm publication through GitHub Actions Trusted
+  Publishing, following the manual package bootstrap.
+- Publish this prerelease under `next` with CI provenance and the validated npm
+  tarball. Official release packages embed their matching selector-workflow commit.
+- No CLI or runner lifecycle behavior changes from beta.1.
+
 ## Release v1.0.0-beta.1 (2026-11-20)
 
 Prepared for the first public beta. CLI, configuration and workflow interfaces
