@@ -1,8 +1,11 @@
+import { packageInfo } from './package-info.mjs';
+
 export const workflowRepository = 'devZWO/hedgehog-runner';
 export const workflowPath = '.github/workflows/select-runner.yml';
 
 /** Produce a fragment, never read or rewrite the consumer's workflow. */
-export function workflowExample(config, { job = 'e2e', ref, fallback = 'ubuntu-latest' } = {}) {
+export function workflowExample(config, { job = 'e2e', ref, fallback = 'ubuntu-latest', publishedRef = packageInfo().workflowCommit } = {}) {
+    ref ??= publishedRef ?? undefined;
     if (!/^[a-z_][a-z\d_-]*$/i.test(job) || job === 'runner_selection') {
         throw new Error('--job must be a GitHub job ID starting with a letter or underscore, other than runner_selection.');
     }

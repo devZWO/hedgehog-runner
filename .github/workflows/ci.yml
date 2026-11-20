@@ -3,12 +3,21 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_call:
+    inputs:
+      upload-package:
+        description: Upload the exact validated tarball for a release.
+        type: boolean
+        default: false
+    secrets:
+      CODECOV_TOKEN:
+        required: false
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 jobs:
@@ -16,14 +25,34 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
       - uses: actions/setup-node@v6
         with:
           node-version: 24
+          package-manager-cache: false
       - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Verify release identity and changelog
+        if: inputs.upload-package
+        run: npm run release:verify
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_PRERELEASE: ${{ github.event.release.prerelease }}
       - run: npm run workflow:check
       - run: npm run test:coverage
       - run: npm run package:check
-      - uses: actions/upload-artifact@v4
+        env:
+          HEDGEHOG_PACKAGE_OUTPUT: ${{ inputs.upload-package && format('{0}/npm-package', runner.temp) || '' }}
+      - name: Upload validated npm tarball
+        if: inputs.upload-package
+        uses: actions/upload-artifact@v7
+        with:
+          name: npm-package
+          path: ${{ runner.temp }}/npm-package/
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@v7
         with:
           name: coverage
           path: lcov.info

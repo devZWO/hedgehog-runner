@@ -9,6 +9,7 @@ import { createInterface } from 'node:readline/promises';
 import { parseArgs } from 'node:util';
 import { loadConfig } from './config.mjs';
 import { workflowExample } from './workflow.mjs';
+import { packageInfo } from './package-info.mjs';
 
 export function createRunner(config) {
     const { account, configureOwner, jobEnv, labels, repository, runnerName: localRunnerName } = config;
@@ -24,8 +25,6 @@ export function createRunner(config) {
     const runnerUrl = `https://github.com/actions/runner/releases/download/v${runnerVersion}/actions-runner-linux-x64-${runnerVersion}.tar.gz`;
     const runnerDirectory = `${accountHome}/actions-runner`;
     const versionMarkerPath = `${runnerDirectory}/.hedgehog-runner-version`;
-    // Preserve registrations from the original zwoPRO helper during migration.
-    const legacyVersionMarkerPath = `${runnerDirectory}/.zwopro-runner-version`;
     const accountDirectories = [runnerDirectory];
     const privilegedGroups = ['sudo', 'admin', 'wheel', 'docker', 'libvirt', 'kvm', 'lxd', 'incus'];
     const versionMarker = `${runnerVersion} ${runnerDigest}\n`;
@@ -550,7 +549,7 @@ export function createRunner(config) {
                 }
             }
             const read = (path) => { const result = probe(['cat', path]); return result.status === 0 ? result.stdout : undefined; };
-            state.files.versionMarker = read(versionMarkerPath) ?? read(legacyVersionMarkerPath);
+            state.files.versionMarker = read(versionMarkerPath);
             state.files.configured = probe(['test', '-f', `${runnerDirectory}/.runner`]).status === 0;
         }
         state.processes = {
@@ -1160,6 +1159,8 @@ Usage: hedgehog-runner <command> [options]
   start            Start the runner in the foreground. Ctrl+C stops it.
   stop             Stop the runner and keep the workspace and caches.
   remove           Confirm deregistration or removal of the runner and account.
+  version          Show the installed Hedgehog Runner package version.
+  help             Show this help message.
 
 Options (before or after the command):
   --config <file>          Use this JSON file instead of checkout .hedgehog.json.
@@ -1201,12 +1202,20 @@ Workflow generator:
   workflow --job e2e prints a fragment to merge under your existing jobs: mapping.
   Keep existing job steps, needs dependencies, permissions and required-check names.
   Pass --ref with a reviewed full SHA containing the published selector workflow.
-  Without --ref, output is clearly marked TEMPLATE ONLY with a SHA placeholder.
+  Release packages use their bundled workflow commit by default.
+  Development packages without a pin print TEMPLATE ONLY with a SHA placeholder.
   Configure RUNNER_OWNER_ID and the two named GitHub App secrets as instructed.
   No --write option, workflow changes, sudo or GitHub API calls are performed.
 
 Tokens are entered only in GitHub's config.sh, never as CLI options.
-Use --help, -h or help to show this message.`);
+Local integration guide: node_modules/@devzwo/hedgehog-runner/ai/usage.md
+Use version or --version to show the installed package version.
+Use help, --help or -h to show this message.
+
+With an npm script, put flags after an extra -- so npm forwards them:
+  npm run runner -- --help
+  npm run runner -- --version
+Or use the subcommands: npm run runner help / npm run runner version.`);
     return 0;
 }
 
@@ -1222,6 +1231,7 @@ export async function runCli(args = process.argv.slice(2), {
     prompt = configurationPrompt,
     confirm = async (question) => /^y(es)?$/i.test((await configurationPrompt(`${question} [y/N] `)).trim()),
 } = {}) {
+    if (args.length === 1 && ['version', '--version'].includes(args[0])) { console.log(packageInfo().version); return 0; }
     if (!args.length || args.some((arg) => ['help', '--help', '-h'].includes(arg))) return showHelp();
     try {
         const { values, positionals, tokens } = parseArgs({ args, allowPositionals: true, tokens: true, options: {

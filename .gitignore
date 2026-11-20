@@ -2,3 +2,5 @@
 node_modules/
 lcov.info
 *.tgz
+docs/package-info.json
+docs/select-runner.yml

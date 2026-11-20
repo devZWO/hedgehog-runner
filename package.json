@@ -8,15 +8,27 @@
     "hedgehog-runner": "src/cli.mjs"
   },
   "files": [
-    "src/"
+    "src/cli.mjs",
+    "src/config.mjs",
+    "src/runner.mjs",
+    "src/workflow.mjs",
+    "src/package-info.mjs",
+    "ai/usage.md",
+    "docs/package-info.json",
+    "docs/select-runner.yml",
+    "llms.txt",
+    "CHANGELOG.md"
   ],
   "engines": {
     "node": ">=24"
   },
   "scripts": {
-    "test": "npm run workflow:lint && node --test",
-    "test:coverage": "npm run workflow:lint && node --test --experimental-test-coverage --test-coverage-include='src/*.mjs' --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=lcov.info",
+    "test": "node scripts/prepare-package.mjs && npm run workflow:lint && node --test",
+    "test:coverage": "node scripts/prepare-package.mjs && npm run workflow:lint && node --test --experimental-test-coverage --test-coverage-include='src/*.mjs' --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=lcov.info",
     "package:check": "bash scripts/check-package.sh",
+    "prepack": "node scripts/prepare-package.mjs",
+    "release:verify": "node scripts/check-release.mjs",
+    "release:check": "npm run workflow:check && npm run test:coverage && npm run package:check",
     "workflow:check": "node scripts/selection-workflow.mjs --check",
     "workflow:lint": "node scripts/check-workflows.mjs",
     "runner": "node src/cli.mjs"

@@ -1,0 +1,49 @@
+name: Publish npm package
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: npm-publish
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.repository == 'devZWO/hedgehog-runner'
+    uses: ./.github/workflows/ci.yml
+    with:
+      upload-package: true
+    secrets:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+  publish:
+    needs: validate
+    runs-on: ubuntu-latest
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: npm-package
+          path: package/
+      - name: Publish the validated tarball with provenance
+        working-directory: package
+        run: |
+          set -eu
+          sha256sum --check SHA256SUMS
+          set -- ./*.tgz
+          test "$#" -eq 1 && test -f "$1"
+          npm publish "$1" --ignore-scripts --access public --provenance --tag "$NPM_DIST_TAG"
+        env:
+          NPM_DIST_TAG: ${{ github.event.release.prerelease && 'next' || 'latest' }}

@@ -9,6 +9,13 @@ Set up a self-hosted GitHub Actions runner on your Ubuntu laptop and start it
 when you need it. Hedgehog Runner guides registration and runs GitHub's
 runner under a dedicated Linux account.
 
+For AI-assisted project integration, start with the [local AI guide](ai/usage.md).
+It is included at `node_modules/@devzwo/hedgehog-runner/ai/usage.md` together with
+this README, [CHANGELOG.md](CHANGELOG.md), [llms.txt](llms.txt), version identity
+and an exact selector-workflow snapshot. Prefer the installed version's files
+over documentation from a different release. `hedgehog-runner --version` identifies
+the installed CLI.
+
 ## Requirements
 
 - Ubuntu x86-64 with systemd, Node.js 24 or later, Git and `sudo` access
@@ -21,10 +28,12 @@ private repositories. [GitHub's guidance on self-hosted runner security](https:/
 
 ## Quick start
 
-1. Install a specific package version in your repository.
+1. Install a specific published package version in your repository. Replace
+   `VERSION` with the intended exact release; for an existing installation,
+   read its package.json rather than silently selecting a different version.
 
    ```sh
-   npm install --save-dev --save-exact @devzwo/hedgehog-runner@0.1.0
+   npm install --save-dev --save-exact @devzwo/hedgehog-runner@VERSION
    ```
 
    Add `.hedgehog.json` at the root of your checkout. Replace the example
@@ -98,7 +107,7 @@ being replaced by interactive questions.
 | `--account gha-existing` | Overrides `account` in the local profile. |
 | `--runner-name my-laptop` | Overrides `runnerName` in the local profile. |
 | `--job e2e` | `workflow` only: ID of the existing workload job to show in the YAML fragment (default `e2e`). |
-| `--ref <full-commit-sha>` | `workflow` only: reviewed 40-character SHA containing the published reusable workflow. Without it, output is marked as a template with a placeholder. |
+| `--ref <full-commit-sha>` | `workflow` only: override the bundled release workflow commit with another reviewed 40-character SHA. Development packages without a bundled pin print a template placeholder. |
 | `--fallback ubuntu-latest` | `workflow` only: hosted fallback label. Defaults to `ubuntu-latest`; supports `ubuntu-*`, `windows-*` and `macos-*` labels. Choose a label available to your repository. |
 
 `version` describes the file format and has no CLI option. Omitting optional
@@ -159,6 +168,26 @@ repositories.
 | `start` / `stop` | Starts the runner in the foreground or stops it from another terminal. |
 | `rename` | Confirms re-registration with a new display name. The workspace and caches are preserved. |
 | `remove` | Prompts to deregister the runner and optionally delete its data and account. |
+| `version` / `--version` | Shows the installed Hedgehog Runner package version without configuration or host inspection. |
+| `help` / `--help` / `-h` | Shows CLI usage and options. |
+
+When invoking a package.json script such as `"runner": "hedgehog-runner"`
+(or this repository's `"runner": "node src/cli.mjs"`), use subcommands directly:
+
+```sh
+npm run runner help
+npm run runner version
+```
+
+Flags need an additional `--` separator so npm forwards them to the CLI:
+
+```sh
+npm run runner -- --help
+npm run runner -- --version
+```
+
+Without that separator, `npm run runner --version` displays npm's own version.
+Direct `hedgehog-runner --version` and `hedgehog-runner --help` remain supported.
 
 ### Configure the PR owner
 
@@ -192,12 +221,12 @@ It compares `github.event.pull_request.user.id` with `vars.RUNNER_OWNER_ID`, che
 that the PR comes from the same repository, and queries whether a runner with all
 required labels is online and idle before choosing its `runs-on` value.
 
-The original zwoPRO integration uses exactly that policy: matching same-repository
-owner PRs prefer the available laptop runner; other PRs, pushes to `main`, missing
-or invalid owner configuration, and failed availability checks use `ubuntu-latest`.
-Hedgehog Runner's reusable selector extracts that policy for other repositories,
-with configurable labels and a hosted fallback. Availability is checked before selection; it does not guarantee failover
-if a runner goes offline after a job has been assigned.
+Matching same-repository owner PRs prefer an available local runner. Other PRs,
+pushes to `main`, missing or invalid owner configuration, and failed availability
+checks use the hosted fallback, which defaults to `ubuntu-latest`. The reusable
+selector supports configurable labels and a hosted fallback. Availability is
+checked before selection; it does not guarantee failover if a runner goes offline
+after a job has been assigned.
 
 The variable selects one PR-author account for the entire repository, not a
 separate owner for each installed runner. Changing it affects every workflow that
@@ -224,11 +253,16 @@ it requires. This matters for required checks and jobs that already depend on
 builds or other quality gates. `--job` selects another existing job ID. The label
 list includes `self-hosted`, `linux`, `x64` and your configured custom labels.
 
-The reusable workflow must first be published to
-`devZWO/hedgehog-runner/.github/workflows/select-runner.yml`. This package does not
-embed a published revision yet: without `--ref`, the output says **TEMPLATE ONLY**
-and includes `REPLACE_WITH_PUBLISHED_WORKFLOW_COMMIT_SHA`. Replace it with a reviewed
-full commit SHA containing that workflow, or regenerate with:
+Official release packages embed the release's immutable workflow commit and use
+it by default. Inspect [package identity](docs/package-info.json) and the
+[bundled selector snapshot](docs/select-runner.yml) for the exact installed version.
+The remote reference points to
+`devZWO/hedgehog-runner/.github/workflows/select-runner.yml` at that commit.
+
+Local/development packages do not claim that their source is published. Without
+a release pin, the output says **TEMPLATE ONLY** and includes
+`REPLACE_WITH_PUBLISHED_WORKFLOW_COMMIT_SHA`. Replace it with a reviewed published
+SHA, or explicitly choose another reviewed version with:
 
 ```sh
 hedgehog-runner workflow --job e2e --ref "$SELECTOR_COMMIT_SHA"
@@ -359,12 +393,20 @@ run `sudo -v` in the same terminal first to include protected account details.
 
 ## Development
 
+See [CONTRIBUTING.md on GitHub](https://github.com/devZWO/hedgehog-runner/blob/main/CONTRIBUTING.md)
+for contribution rules, release preparation and npm Trusted Publishing setup.
+The publish workflow validates a GitHub Release, tests the actual tarball, then
+publishes that same artifact with OIDC and provenance through the `npm` environment.
+Stable versions use `latest`; SemVer prereleases use `next`. Creating the workflow
+file does not configure npm trust or publish a package.
+
 Run `npm test` for the Node test suite and `npm run package:check` to install
 and check a locally packed tarball. Run `npm ci` first to install the development
 YAML parser used by tests. `npm run workflow:check` checks that the committed
 selector workflow embeds the current tested selection functions. After editing
 `src/selection.mjs`, regenerate it with `node scripts/selection-workflow.mjs`.
-`npm test` and `npm run test:coverage` first run `npm run workflow:lint`: actionlint
+`npm test` and `npm run test:coverage` refresh ignored package metadata, then run
+`npm run workflow:lint`: actionlint
 checks every repository workflow plus completed generator examples against the
 actual local reusable-workflow interface. Thus malformed expressions, unknown
 inputs or mismatched secret names fail tests, not just a one-time manual check.
@@ -378,5 +420,14 @@ shellcheck and pyflakes integration is disabled to keep results reproducible.
 The generated workflow needs no checkout, npm installation or runtime download
 of selection source. CI generates an LCOV report and publishes
 it to Codecov when `CODECOV_TOKEN` is configured.
+
+`npm pack` prepares the offline documentation automatically. `package:check`
+enforces an exact archive allowlist: five runtime modules, package manifest,
+license, README, AI guide, changelog, documentation index, selector snapshot and
+package identity. It rejects unexpected files and validates local documentation
+links, the installed CLI version and the snapshot digest. Tests, developer tools,
+repository AGENTS.md, CONTRIBUTING.md, caches and the build-only selection module
+stay outside the npm bundle. The package has no production dependencies or
+install-time host setup scripts.
 
 [MIT License](LICENSE)

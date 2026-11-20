@@ -1,10 +1,31 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { validateConfig } from '../src/config.mjs';
 import { runCli } from '../src/runner.mjs';
+
+test('help and version subcommands and flags work through npm scripts without configuration', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'hedgehog-npm-wrapper-'));
+    const version = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
+    try {
+        writeFileSync(join(directory, 'package.json'), JSON.stringify({ private: true, scripts: { runner: 'node runner.mjs' } }));
+        writeFileSync(join(directory, 'runner.mjs'),
+            `import { runCli } from ${JSON.stringify(new URL('../src/runner.mjs', import.meta.url).href)};\nprocess.exitCode = await runCli();\n`);
+        for (const args of [['version'], ['--', '--version'], ['help'], ['--', '--help']]) {
+            const result = spawnSync('npm', ['run', '--silent', 'runner', ...args], { cwd: directory, encoding: 'utf8' });
+            assert.equal(result.status, 0, result.stderr);
+            if (args.at(-1).includes('version')) assert.equal(result.stdout.trim(), version);
+            else {
+                assert.match(result.stdout, /Usage: hedgehog-runner/);
+                assert.match(result.stdout, /npm run runner -- --help/);
+                assert.match(result.stdout, /npm run runner -- --version/);
+            }
+        }
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+});
 
 test('remove resolves an explicit repository outside a checkout without labels or a runner name', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'hedgehog-cli-'));

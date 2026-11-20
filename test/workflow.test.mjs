@@ -28,7 +28,7 @@ test('workflow generator prints valid YAML with explicit secrets, label JSON and
 });
 
 test('unpublished default is explicitly a template and unsafe job IDs or refs are rejected', () => {
-    const template = workflowExample(config);
+    const template = workflowExample(config, { publishedRef: null });
     assert.match(template, /TEMPLATE ONLY/);
     assert.match(template, /@REPLACE_WITH_PUBLISHED_WORKFLOW_COMMIT_SHA/);
     for (const job of ['runner_selection', 'bad\njob', 'bad:job', '123job', '']) {
